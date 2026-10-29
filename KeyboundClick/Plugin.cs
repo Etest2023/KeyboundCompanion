@@ -34,7 +34,7 @@ public sealed unsafe class Plugin : IDalamudPlugin
 
     private readonly SubmitWordDelegate? submit;
     private readonly ClickGate gate = new();
-    private readonly SubmissionCooldown cooldown = new(Stopwatch.Frequency);
+    private readonly SubmissionCooldown cooldown = new(Stopwatch.Frequency / 10, Stopwatch.Frequency);
     private Candidate[] candidates = [];
     private string status = "等待进入魔光键影";
     private string lastResult = "尚未提交";
@@ -46,7 +46,7 @@ public sealed unsafe class Plugin : IDalamudPlugin
     private long refreshedAt;
     private bool ready;
     private int submissionCount;
-    private bool automatic;
+    private bool automatic = true;
     private int intervalMs = 1000;
     private readonly IntervalSchedule schedule = new(Random.Shared);
 
@@ -68,6 +68,7 @@ public sealed unsafe class Plugin : IDalamudPlugin
         Pi.UiBuilder.OpenMainUi += Open;
         Pi.UiBuilder.OpenConfigUi += Open;
         Framework.Update += Update;
+        schedule.Reset(Environment.TickCount64, intervalMs);
         Log.Information("KeyboundClick loaded; signature resolved: {Resolved}", submit != null);
     }
 
@@ -108,7 +109,7 @@ public sealed unsafe class Plugin : IDalamudPlugin
                 value.String.Value = text;
                 if (!cooldown.TryAcquire(Stopwatch.GetTimestamp()))
                 {
-                    if (clicked) lastResult = "未提交：两次提交至少间隔 1 秒";
+                    if (clicked) lastResult = "未提交：两次提交至少间隔 100 毫秒";
                     return; // Drop early clicks; never queue them for later.
                 }
                 submissionCount++;
@@ -128,7 +129,6 @@ public sealed unsafe class Plugin : IDalamudPlugin
         catch (Exception ex)
         {
             ready = false;
-            automatic = false;
             status = "读取失败，提交已暂停";
             lastResult = "本次操作已结束";
             Log.Error(ex, "KeyboundClick read/submit failed; no retry scheduled");
@@ -142,7 +142,7 @@ public sealed unsafe class Plugin : IDalamudPlugin
         if (initializationError != null) { status = initializationError; return; }
         var main = GameMain.Instance();
         if (!Client.IsLoggedIn || main == null || main->CurrentContentFinderConditionId != 1095)
-        { automatic = false; status = "等待进入魔光键影"; return; }
+        { status = "等待进入魔光键影"; return; }
         var module = AgentModule.Instance();
         if (module == null) { status = "等待游戏界面"; return; }
         var hud = (KtgHud*)module->GetAgentByInternalId((AgentId)397);
@@ -189,7 +189,7 @@ public sealed unsafe class Plugin : IDalamudPlugin
 
     private void Draw()
     {
-        if (!open) { gate.Cancel(); automatic = false; return; }
+        if (!open) { gate.Cancel(); return; }
         ImGui.SetNextWindowSize(new Vector2(440, 340), ImGuiCond.FirstUseEver);
         if (ImGui.Begin("键影随行###KeyboundClick", ref open))
         {
@@ -205,20 +205,20 @@ public sealed unsafe class Plugin : IDalamudPlugin
                 gate.Request();
             }
             ImGui.EndDisabled();
-            ImGui.TextDisabled(remainingMs > 0 ? $"冷却中：剩余 {remainingMs / 1000f:F1} 秒" : "手动和自动共用冷却，两次提交至少间隔 1 秒。");
+            ImGui.TextDisabled(remainingMs > 0 ? $"冷却中：剩余 {remainingMs} 毫秒" : "手动和自动共用冷却，两次提交至少间隔 100 毫秒。");
             ImGui.Spacing();
             ImGui.BeginDisabled(!ready && !automatic);
             if (ImGui.Checkbox("自动间隔提交", ref automatic))
                 schedule.Reset(Environment.TickCount64, intervalMs);
             ImGui.EndDisabled();
             ImGui.SetNextItemWidth(250);
-            if (ImGui.SliderInt("延迟", ref intervalMs, 1000, 10000, "%d 毫秒"))
+            if (ImGui.SliderInt("延迟", ref intervalMs, 100, 10000, "%d 毫秒"))
             {
-                intervalMs = Math.Clamp(intervalMs, 1000, 10000);
+                intervalMs = Math.Clamp(intervalMs, 100, 10000);
                 schedule.Reset(Environment.TickCount64, intervalMs);
             }
-            ImGui.TextDisabled($"每次随机：{Math.Max(1000, (int)Math.Ceiling(intervalMs * .8))}～{(int)Math.Floor(intervalMs * 1.2)} 毫秒（±20%，最低 1 秒）");
-            ImGui.TextDisabled(automatic ? "自动已开启；无法输入时暂停。关闭窗口停止。" : "自动默认关闭，勾选后按间隔提交。");
+            ImGui.TextDisabled($"每次随机：{Math.Max(100, (int)Math.Ceiling(intervalMs * .8))}～{(int)Math.Floor(intervalMs * 1.2)} 毫秒（±20%，最低 100 毫秒）");
+            ImGui.TextDisabled(automatic ? "自动已开启；无法输入时暂停。只能手动取消勾选关闭。" : "自动已关闭；勾选后按间隔提交。");
             ImGui.Separator();
             ImGui.TextWrapped(lastResult);
             if (ImGui.CollapsingHeader("当前候选目标"))
@@ -226,13 +226,12 @@ public sealed unsafe class Plugin : IDalamudPlugin
                     ImGui.BulletText($"{(c.IsBoss ? "首领" : "普通")} · {c.Label} → {c.Word}");
         }
         ImGui.End();
-        if (!open) { gate.Cancel(); automatic = false; }
+        if (!open) gate.Cancel();
     }
 
     public void Dispose()
     {
         disposed = true;
-        automatic = false;
         gate.Cancel();
         Framework.Update -= Update;
         Pi.UiBuilder.Draw -= Draw;

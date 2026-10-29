@@ -25,8 +25,8 @@ foreach (var baseline in new[] {100, 1000, 1100, 1250, 3333, 10000})
     {
         var now = (long)i * 20000;
         schedule.Reset(now, baseline);
-        var clamped = Math.Clamp(baseline, 1000, 10000);
-        Check(schedule.LastDelayMs >= Math.Max(1000, Math.Ceiling(clamped * .8)) && schedule.LastDelayMs <= Math.Floor(clamped * 1.2), "Jitter outside capped ±20%");
+        var clamped = Math.Clamp(baseline, 100, 10000);
+        Check(schedule.LastDelayMs >= Math.Max(100, Math.Ceiling(clamped * .8)) && schedule.LastDelayMs <= Math.Floor(clamped * 1.2), "Jitter outside capped ±20%");
         Check(!schedule.IsDue(now + schedule.LastDelayMs - 1) && schedule.IsDue(now + schedule.LastDelayMs), "Incorrect timer boundary");
         unique.Add(schedule.LastDelayMs);
     }
@@ -34,14 +34,14 @@ foreach (var baseline in new[] {100, 1000, 1100, 1250, 3333, 10000})
     schedule.Reset(100000000, baseline);
     Check(!schedule.IsDue(100000000), "Long stalls must not cause catch-up submissions");
 }
-var cooldown = new SubmissionCooldown(1000000);
+var cooldown = new SubmissionCooldown(100000, 1000000);
 Check(cooldown.TryAcquire(0), "First manual submission must be permitted");
-Check(!cooldown.TryAcquire(999999), "Automatic submission cannot bypass a manual cooldown");
+Check(!cooldown.TryAcquire(99999), "Automatic submission cannot bypass a manual cooldown");
 cooldown.Complete(250000); // Native call took 250 ms; cooldown is measured from completion.
-Check(!cooldown.TryAcquire(1000000) && !cooldown.TryAcquire(1249999), "Slow native calls must not shorten the gap");
-Check(cooldown.TryAcquire(1250000), "Submission must be allowed at exactly one second after completion");
-Check(!cooldown.TryAcquire(1250000), "Same-frame manual/auto requests must produce only one submission");
-cooldown.Complete(1250010); // Also the path used after a failed/throwing native call.
-Check(!cooldown.TryAcquire(2250009) && cooldown.TryAcquire(2250010), "Failed submissions must also consume the cooldown");
-Check(cooldown.RemainingMs(2250011) == 1000, "UI countdown must round up");
-Console.WriteLine("PASS: Boss priority, random fallback, clicks, capped ±20% timing, shared one-second cooldown, failed/slow calls, and no catch-up bursts.");
+Check(!cooldown.TryAcquire(300000) && !cooldown.TryAcquire(349999), "Slow native calls must not shorten the gap");
+Check(cooldown.TryAcquire(350000), "Submission must be allowed at exactly 100 milliseconds after completion");
+Check(!cooldown.TryAcquire(350000), "Same-frame manual/auto requests must produce only one submission");
+cooldown.Complete(350010); // Also the path used after a failed/throwing native call.
+Check(!cooldown.TryAcquire(450009) && cooldown.TryAcquire(450010), "Failed submissions must also consume the cooldown");
+Check(cooldown.RemainingMs(450011) == 100, "UI countdown must round up");
+Console.WriteLine("PASS: Boss priority, random fallback, clicks, capped ±20% timing, shared 100-millisecond cooldown, failed/slow calls, and no catch-up bursts.");
